@@ -1,0 +1,24 @@
+[project]
+name = "xiaoyuzhou-juicer"
+version = "1.0.0"
+description = "把小宇宙（xiaoyuzhoufm）单集链接转成可读逐字稿 + 官方章节 + 嘉宾背景增强 + 结构化摘要的本地笔记工具（BYO-token，纯标准库）。"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "xiaoyuzhou-juicer contributors" }]
+keywords = ["xiaoyuzhou", "podcast", "transcript", "claude-skill", "asr"]
+# 纯标准库实现，无第三方运行时依赖。
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/hesorchen/xiaoyuzhou-juicer"
+Issues = "https://github.com/hesorchen/xiaoyuzhou-juicer/issues"
+
+# 本项目以「单脚本 + Claude Code skill」形态分发，不打包到 PyPI；
+# pyproject.toml 仅承载元数据与工具配置。
+[tool.ruff]
+line-length = 120          # 脚本含大量中文 docstring，CJK 字符按宽度计为 2，留出余量
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]   # pycodestyle 错误 + pyflakes + import 排序

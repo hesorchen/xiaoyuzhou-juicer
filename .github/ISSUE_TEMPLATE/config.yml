@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全 / 凭证泄露问题
+    url: https://github.com/hesorchen/xiaoyuzhou-juicer/security/advisories/new
+    about: 涉及 token 泄露等安全缺陷请走私有渠道，勿公开提 issue（见 SECURITY.md）。

@@ -1,0 +1,9 @@
+把你自己的 x-jike-refresh-token 粘到这里（删掉本说明，整文件只留 token 一行），
+然后另存为同目录下的 token.txt（token.txt 已被 .gitignore 忽略，不会进仓库）。
+
+为什么用 refresh token：它长效，脚本每次运行会自动续期出新的 access token 并把
+轮换后的 refresh token 回存到 token.txt——你只需配置一次。
+
+获取方法见 README.md「如何拿到 token」（浏览器 F12 → 复制 x-jike-refresh-token）。
+若你手头只有短效的 x-jike-access-token，运行脚本时加 --token-is-access。
+refresh token 长期不用也会失效，届时续期接口返回非 200，重新登录抓取即可。

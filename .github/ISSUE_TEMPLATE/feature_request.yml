@@ -1,0 +1,21 @@
+name: 功能建议
+description: 提一个改进或新能力的想法
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 想解决什么问题
+      description: 你在什么场景下遇到了不便？
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 期望的做法
+    validations:
+      required: false
+  - type: markdown
+    attributes:
+      value: |
+        > 注意：本项目**不接受**扩大爬取规模、绕过平台限制、内置/分享凭证类的需求（见 CONTRIBUTING.md）。

@@ -1,0 +1,42 @@
+name: Bug 反馈
+description: 抓取失败 / 接口报错 / 产出异常
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。**请勿在任何字段粘贴你的 token / cookie / 账号信息。**
+  - type: input
+    id: error
+    attributes:
+      label: 现象
+      description: 报错信息或异常表现（HTTP 状态码、堆栈等，注意打码凭证）
+      placeholder: "例：逐字稿接口返回 403 / 401 / 404"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: 触发的功能
+      options:
+        - 元信息 / 章节（--meta-only）
+        - 逐字稿
+        - 评论区（--comments）
+        - 发现 / 订阅 / inbox
+        - 其它
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python 版本
+      placeholder: "python3 --version 的输出"
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      description: 执行的命令（**删掉 token**）与预期/实际结果
+    validations:
+      required: true
