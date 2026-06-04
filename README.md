@@ -77,6 +77,18 @@
 | 最适合谁 | 一句话目标听众 |
 | 一句话 | **值得/可跳过** + 听的核心 |
 
+## 📸 真实样例
+
+用一期真实超长播客（6h45min）跑出来的产出截图——决策卡、嘉宾背景卡、章节骨架、金句、争议存疑：
+
+<p align="center">
+  <img src="docs/demo/02-decision-card.png" width="32%" alt="决策卡" />
+  <img src="docs/demo/03-guest-card.png" width="32%" alt="嘉宾背景卡" />
+  <img src="docs/demo/05-quotes.png" width="32%" alt="金句 Top 10" />
+</p>
+
+> 👉 完整 6 张样例与说明见 **[docs/demo/](docs/demo/)**。截图仅演示输出结构，来源张小珺·商业访谈录 #133，版权归原播客所有，请勿转载完整产出。
+
 ## 快速开始
 
 ### 1. 只取元信息 / 官方章节（无需 token）
