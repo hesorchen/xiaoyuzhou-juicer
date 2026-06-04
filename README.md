@@ -167,6 +167,10 @@ export XYZ_REFRESH_TOKEN="你的refresh_token"
 把整个目录放进 `~/.claude/skills/`，对话里给出小宇宙链接即可触发，
 Claude 会按 `SKILL.md` 跑：抓取 → 读章节 → 说话人标注 → WebFetch 增强嘉宾背景 → 用官方章节做骨架出摘要。
 
+下图是在 Claude Code 客户端（这里用的是 muselab，一个自托管 AI workspace）里实际运行的样子——左侧文件区是榨好的笔记，右侧助手正按 `SKILL.md` 流程核对章节、整理摘要：
+
+![在 Claude Code 客户端里运行](docs/demo/07-in-muselab.png)
+
 ## 架构
 
 ```
