@@ -1,0 +1,7 @@
+interface:
+  display_name: "小宇宙榨汁机"
+  short_description: "抓取小宇宙逐字稿并生成可校验的结构化播客笔记"
+  default_prompt: "Use $xiaoyuzhou-juicer to process this Xiaoyuzhou episode after asking me to choose a mode."
+
+policy:
+  allow_implicit_invocation: true

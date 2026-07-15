@@ -17,6 +17,7 @@ xyz_fetch.py — 小宇宙单集元信息 + 逐字稿抓取（零第三方依赖
     python3 xyz_fetch.py --discover       --token-file ../config/token.txt  # 发现页聚合
     python3 xyz_fetch.py --subscriptions  --token-file ../config/token.txt  # 我的订阅
     python3 xyz_fetch.py --inbox          --token-file ../config/token.txt  # 订阅更新
+    python3 xyz_fetch.py --search "关键词" --token-file ../config/token.txt  # 搜索单集/播客
 
 抓取缓存默认写到 ~/.cache/xiaoyuzhou-juicer/<eid>/（遵循 XDG，可用 --out 覆盖）。
 账户级模式（discover/subscriptions/inbox）写到缓存根目录下的 discover.md / subscriptions.md / inbox.md。
@@ -36,13 +37,25 @@ xyz_fetch.py — 小宇宙单集元信息 + 逐字稿抓取（零第三方依赖
     - 本脚本只抓取「你自己账号有权访问」的内容，仅供个人本地存档/学习。
 """
 import argparse
+import contextlib
+import datetime as dt
+import gzip
+import hashlib
 import json
 import os
 import re
 import sys
+import tempfile
+import time
 import urllib.error
 import urllib.request
+import zlib
 from html import unescape
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows fallback uses lock directory
+    fcntl = None
 
 UA_WEB = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 # 逐字稿 CDN 白名单要求的 App UA（改成普通 UA 会 403）
@@ -75,10 +88,26 @@ def eprint(*a):
     print(*a, file=sys.stderr)
 
 
+def decode_http_body(raw, content_encoding=""):
+    """Decode compression left untouched by urllib/CDNs."""
+    encoding = (content_encoding or "").lower()
+    if raw.startswith(b"\x1f\x8b"):
+        return gzip.decompress(raw)
+    # Some intermediaries decode the body but leave the header unchanged.
+    if "gzip" in encoding:
+        return raw
+    if "deflate" in encoding:
+        try:
+            return zlib.decompress(raw)
+        except zlib.error:
+            return raw
+    return raw
+
+
 def http_get(url, headers=None, timeout=30):
     req = urllib.request.Request(url, headers=headers or {"User-Agent": UA_WEB})
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
+        return decode_http_body(r.read(), r.headers.get("Content-Encoding", ""))
 
 
 def http_post_json(url, payload, headers=None, timeout=30):
@@ -87,7 +116,87 @@ def http_post_json(url, payload, headers=None, timeout=30):
     h.update(headers or {})
     req = urllib.request.Request(url, data=data, headers=h, method="POST")
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read())
+        raw = decode_http_body(r.read(), r.headers.get("Content-Encoding", ""))
+        return json.loads(raw)
+
+
+def atomic_write_text(path, text, mode=0o600):
+    """Write sensitive/local state atomically so interruption cannot truncate it."""
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=directory, text=True)
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+@contextlib.contextmanager
+def credential_lock(token_file, timeout=30):
+    """Serialize rotating refresh-token use across concurrent processes."""
+    lock_path = os.path.abspath(token_file) + ".lock"
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    if fcntl is not None:
+        with open(lock_path, "a+", encoding="utf-8") as lock:
+            started = time.monotonic()
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if time.monotonic() - started >= timeout:
+                        raise TimeoutError("等待 refresh token 文件锁超时")
+                    time.sleep(0.1)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock, fcntl.LOCK_UN)
+        return
+
+    lock_dir = lock_path + ".d"
+    started = time.monotonic()
+    while True:
+        try:
+            os.mkdir(lock_dir)
+            break
+        except FileExistsError:
+            if time.monotonic() - started >= timeout:
+                raise TimeoutError("等待 refresh token 文件锁超时")
+            time.sleep(0.1)
+    try:
+        yield
+    finally:
+        os.rmdir(lock_dir)
+
+
+def access_cache_path(token_file):
+    key = hashlib.sha256(os.path.abspath(token_file).encode()).hexdigest()[:20]
+    return os.path.join(default_cache_dir(), "auth", f"{key}.json")
+
+
+def load_cached_access(token_file, now=None):
+    path = access_cache_path(token_file)
+    now = now or time.time()
+    try:
+        with open(path, encoding="utf-8") as f:
+            cached = json.load(f)
+        if cached.get("expires_at", 0) > now + 60:
+            return cached.get("access_token")
+    except (OSError, ValueError, TypeError):
+        return None
+    return None
+
+
+def save_cached_access(token_file, access_token, ttl=90 * 60):
+    path = access_cache_path(token_file)
+    payload = {"access_token": access_token, "expires_at": time.time() + ttl}
+    atomic_write_text(path, json.dumps(payload, ensure_ascii=False) + "\n")
 
 
 def api_post(path, payload, access_token, timeout=30):
@@ -161,6 +270,30 @@ def extract_chapters(shownotes_text):
     return chapters
 
 
+def snapshot_metrics(pub_date, play_count, comment_count, now=None):
+    """Add age-normalized snapshot metrics without changing source counters."""
+    now = now or dt.datetime.now(dt.timezone.utc)
+    try:
+        published = dt.datetime.fromisoformat((pub_date or "").replace("Z", "+00:00"))
+        if published.tzinfo is None:
+            published = published.replace(tzinfo=dt.timezone.utc)
+        age_hours = max((now - published).total_seconds() / 3600, 0.0)
+    except (TypeError, ValueError):
+        age_hours = None
+    plays_per_hour = None
+    if age_hours and isinstance(play_count, (int, float)):
+        plays_per_hour = round(play_count / age_hours, 2)
+    comments_per_1000 = None
+    if play_count and isinstance(comment_count, (int, float)):
+        comments_per_1000 = round(comment_count * 1000 / play_count, 2)
+    return {
+        "fetched_at": now.isoformat().replace("+00:00", "Z"),
+        "age_hours": round(age_hours, 2) if age_hours is not None else None,
+        "plays_per_hour": plays_per_hour,
+        "comments_per_1000_plays": comments_per_1000,
+    }
+
+
 def fetch_meta(eid):
     url = f"{WEB_BASE}/episode/{eid}"
     html = http_get(url).decode("utf-8", "ignore")
@@ -168,6 +301,10 @@ def fetch_meta(eid):
     if not m:
         raise RuntimeError("页面里找不到 __NEXT_DATA__，小宇宙改版了？")
     data = json.loads(m.group(1))
+    # SSR 里单集对象本体（含播放/互动数），优先精确取，deep_find 兜底
+    ep = data.get("props", {}).get("pageProps", {}).get("episode", {})
+    if not isinstance(ep, dict):
+        ep = {}
 
     def first(key, default=None):
         v = deep_find(data, key)
@@ -192,12 +329,22 @@ def fetch_meta(eid):
         am = re.search(r'property="og:audio" content="([^"]+)"', html)
         if am:
             audio = am.group(1)
-    # 播客名
-    pod = first("podcast")
+    # 播客名 + 节目订阅数
+    pod = ep.get("podcast") if isinstance(ep.get("podcast"), dict) else first("podcast")
     podcast_title = pod.get("title") if isinstance(pod, dict) else None
+    pod_subs = pod.get("subscriptionCount") if isinstance(pod, dict) else None
 
     shownotes_text = html_to_text(shownotes_html)
     chapters = extract_chapters(shownotes_text)
+
+    stats = {
+        "play_count": ep.get("playCount"),
+        "favorite_count": ep.get("favoriteCount"),
+        "comment_count": ep.get("commentCount"),
+        "clap_count": ep.get("clapCount"),
+        "podcast_subscriptions": pod_subs,
+    }
+    snapshot = snapshot_metrics(pub, stats["play_count"], stats["comment_count"])
 
     return {
         "eid": eid,
@@ -211,6 +358,9 @@ def fetch_meta(eid):
         "media_id": media_id,
         "audio_url": audio,
         "chapters": [{"ts": c[0], "title": c[1]} for c in chapters],
+        # 热度信号（SSR 免 token）：进「决策卡」的客观参考
+        "stats": stats,
+        "snapshot": snapshot,
         "_shownotes_text": shownotes_text,
     }
 
@@ -391,6 +541,31 @@ def render_inbox_md(items):
     return "\n".join(L)
 
 
+def fetch_search(keyword, access_token, stype="EPISODE", limit=20):
+    """关键词搜索（需 token）。stype ∈ {EPISODE, PODCAST}。
+    补足发现页只有各榜 Top 3 的短板：用户有明确话题时走搜索。"""
+    resp = api_post("/v1/search/create",
+                    {"keyword": keyword, "type": stype, "limit": limit},
+                    access_token)
+    return resp.get("data", [])
+
+
+def render_search_md(keyword, stype, items):
+    L = [f"# 搜索 · {keyword}（{stype}，{len(items)} 条）", ""]
+    if not items:
+        L.append("（无结果，换个关键词试试）")
+        return "\n".join(L)
+    for it in items:
+        if stype == "PODCAST":
+            subs = it.get("subscriptionCount")
+            L.append(f"- **{it.get('title', '')}**　{it.get('author', '')}　"
+                     f"{'订阅 ' + str(subs) if subs else ''}　共 {it.get('episodeCount')} 集")
+            L.append(f"  <{WEB_BASE}/podcast/{it.get('pid', '')}>")
+        else:
+            L.append(_ep_line(it))
+    return "\n".join(L)
+
+
 def fetch_comments(eid):
     """从单集页 SSR 取首屏热评（免 token）。
     小宇宙 SSR 仅内嵌首屏约 20 条热评；全量需私有评论接口（参数未公开）。"""
@@ -412,8 +587,7 @@ def fetch_comments(eid):
 
 
 def _author_tags(c):
-    """评论者身份信号：主播/嘉宾本人回复、重度听众。
-    总结时据此给观点加权（嘉宾的评论区补充、资深听众的判断 > 路人随手赞）。"""
+    """Render only identities explicit in API fields; preserve unknown relations raw."""
     tags = []
     pa = (c.get("podcastAssociation") or "NONE").upper()
     aa = (c.get("authorAssociation") or "NONE").upper()
@@ -422,10 +596,10 @@ def _author_tags(c):
     elif "GUEST" in pa or "GUEST" in aa:
         tags.append("[嘉宾]")
     else:
-        # 其它非 NONE 的关系标签保留原值，交给总结时人工判断
+        # ORIGINAL 等字段不是“主播”的充分证据，保留原值而不脑补身份。
         other = next((v for v in (pa, aa) if v not in ("NONE", "")), None)
         if other:
-            tags.append(f"[{other}]")
+            tags.append(f"[关联:{other}]")
     # 重度听众 badge（如「TA收听该节目达100小时」）
     for b in (c.get("badges") or []):
         if "小时" in (b.get("tip") or ""):
@@ -488,16 +662,26 @@ def resolve_access_token(args):
         return None
     if kind == "access":
         return val
-    # refresh → access
-    eprint("→ 用 refresh token 续期 access token…")
-    new_access, new_refresh = refresh_access_token(val)
-    if src and new_refresh and new_refresh != val:
-        try:
-            open(src, "w").write(new_refresh + "\n")
-            eprint(f"  已轮换并回存新的 refresh token 到 {src}")
-        except OSError as e:
-            eprint(f"  ! 新 refresh token 回存失败（{e}），下次可能需重新登录")
-    return new_access
+    if not src:
+        eprint("→ 用 refresh token 续期 access token…")
+        return refresh_access_token(val)[0]
+
+    # Rotation must be read-refresh-written under one lock. Re-read after locking
+    # because another process may have already rotated the token while we waited.
+    with credential_lock(src):
+        cached = load_cached_access(src)
+        if cached:
+            eprint("→ 复用本地缓存的 access token")
+            return cached
+        with open(src, encoding="utf-8") as f:
+            current_refresh = f.read().strip()
+        eprint("→ 用 refresh token 续期 access token…")
+        new_access, new_refresh = refresh_access_token(current_refresh)
+        if new_refresh and new_refresh != current_refresh:
+            atomic_write_text(src, new_refresh + "\n")
+            eprint(f"  已原子轮换并回存新的 refresh token 到 {src}")
+        save_cached_access(src, new_access)
+        return new_access
 
 
 def main():
@@ -520,13 +704,18 @@ def main():
                     help="账户级：列出我的订阅（需 token）")
     ap.add_argument("--inbox", action="store_true",
                     help="账户级：订阅的最新单集更新（需 token）")
+    ap.add_argument("--search", metavar="KEYWORD",
+                    help="账户级：关键词搜索单集/播客（需 token）")
+    ap.add_argument("--search-type", default="EPISODE",
+                    choices=["EPISODE", "PODCAST"],
+                    help="搜索类型（默认 EPISODE）")
     args = ap.parse_args()
 
     out_root = args.out or default_cache_dir()
     os.makedirs(out_root, exist_ok=True)
 
     # ---- 账户级模式（不依赖某条单集，需 token）----
-    if args.discover or args.subscriptions or args.inbox:
+    if args.discover or args.subscriptions or args.inbox or args.search:
         try:
             token = resolve_access_token(args)
         except urllib.error.HTTPError as e:
@@ -552,6 +741,12 @@ def main():
             p = os.path.join(out_root, "inbox.md")
             open(p, "w").write(render_inbox_md(items))
             eprint(f"✓ 订阅更新 {len(items)} 集 → {p}")
+        if args.search:
+            items = fetch_search(args.search, token, stype=args.search_type)
+            slug = re.sub(r"[^\w一-鿿]+", "-", args.search).strip("-")[:40]
+            p = os.path.join(out_root, f"search-{slug}.md")
+            open(p, "w").write(render_search_md(args.search, args.search_type, items))
+            eprint(f"✓ 搜索「{args.search}」{len(items)} 条 → {p}")
         return
 
     if not args.episode:

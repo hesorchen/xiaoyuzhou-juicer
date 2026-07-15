@@ -34,4 +34,10 @@ jobs:
       - name: Byte-compile (no third-party deps)
         run: python -m compileall -q scripts
       - name: Smoke test --help
-        run: python scripts/xyz_fetch.py --help
+        run: |
+          python scripts/xyz_fetch.py --help
+          python scripts/xyz_render.py --help
+          python scripts/xyz_validate.py --help
+          python scripts/install_skill.py --help
+      - name: Offline unit tests
+        run: python -m unittest discover -s tests -v
