@@ -1,6 +1,7 @@
 # 凭证：绝不入库
 config/token.txt
 config/*.token
+config/archive.ini
 .env
 *.token
 

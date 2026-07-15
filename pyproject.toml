@@ -1,6 +1,6 @@
 [project]
 name = "xiaoyuzhou-juicer"
-version = "1.0.0"
+version = "1.3.0"
 description = "把小宇宙（xiaoyuzhoufm）单集链接转成可读逐字稿 + 官方章节 + 嘉宾背景增强 + 结构化摘要的本地笔记工具（BYO-token，纯标准库）。"
 readme = "README.md"
 requires-python = ">=3.8"
